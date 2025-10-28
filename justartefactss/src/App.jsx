@@ -1,33 +1,133 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, BookUser, Sprout, Menu, X, Coins, Gem, Feather, 
-  Mail, Lock, UserCircle, Landmark, LayoutDashboard, Wallet, Store, Settings // Added new icons
+  Mail, Lock, UserCircle, Landmark, LayoutDashboard, Wallet, Store, Settings
 } from 'lucide-react';
+
+// Import Firebase SDKs
+import { initializeApp, setLogLevel } from "firebase/app"; // Moved setLogLevel here
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  signOut,
+  signInAnonymously,
+  signInWithCustomToken,
+  // Removed setLogLevel from here
+} from "firebase/auth";
+import { 
+  getFirestore, 
+  doc, 
+  setDoc
+} from "firebase/firestore";
+
+// Your web app's Firebase configuration (from your image)
+// This is used as a fallback if the global config isn't available.
+const firebaseConfigFallback = {
+  apiKey: "AIzaSyAVSYlXtPwHQKtxFiE-A4kMP_X4u3m6m_M", // Be careful with API keys in public code
+  authDomain: "justartefactss.firebaseapp.com",
+  projectId: "justartefactss",
+  storageBucket: "justartefactss.firebasestorage.app",
+  messagingSenderId: "240717554796",
+  appId: "1:240717554796:web:133c0f17211fa103566449",
+  measurementId: "G-2YLDPSZWFS"
+};
+
+// --- Firebase Initialization ---
+// Use global config if available, otherwise use fallback
+const firebaseConfig = typeof __firebase_config !== 'undefined' 
+  ? JSON.parse(__firebase_config) 
+  : firebaseConfigFallback;
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+setLogLevel('Debug'); // Enable debug logging for Firebase
 
 // Main App Component - Manages navigation and auth state
 export default function App() {
   const [page, setPage] = useState('home');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false); // NEW: Auth state
+  
+  // --- NEW Auth States ---
+  const [auth, setAuth] = useState(null);
+  const [db, setDb] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false); // To prevent flashes of login page
+
+  // --- NEW: One-time Firebase Init Effect ---
+  useEffect(() => {
+    const authInstance = getAuth(app);
+    const dbInstance = getFirestore(app);
+    setAuth(authInstance);
+    setDb(dbInstance);
+
+    // Sign in using the provided token or anonymously
+    const signIn = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(authInstance, __initial_auth_token);
+        } else {
+          await signInAnonymously(authInstance);
+        }
+      } catch (error) {
+        console.error("Error signing in:", error);
+      }
+    };
+    signIn();
+
+    // --- NEW: Auth State Listener ---
+    // This runs when the component mounts and listens for auth changes
+    const unsubscribe = onAuthStateChanged(authInstance, (user) => {
+      if (user) {
+        // User is signed in
+        setIsAuthenticated(true);
+        setUserId(user.uid);
+        if (page === 'login') { // If they were on login page, send to dashboard
+          navigateTo('dashboard');
+        }
+      } else {
+        // User is signed out
+        setIsAuthenticated(false);
+        setUserId(null);
+      }
+      setIsAuthReady(true); // Firebase has checked auth status
+    });
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
+  }, [page]); // Re-run effect if page changes (to handle redirect from login)
 
   const navigateTo = (pageName) => {
     setPage(pageName);
-    setIsMobileMenuOpen(false); // Close mobile menu on navigation
+    setIsMobileMenuOpen(false);
   };
 
-  // NEW: Function to handle login
-  const handleLogin = () => {
-    setIsAuthenticated(true);
-    navigateTo('dashboard'); // Navigate to dashboard after login
-  };
-
-  // NEW: Function to handle logout
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    navigateTo('home'); // Navigate to home after logout
+  // --- UPDATED: Logout Handler ---
+  const handleLogout = async () => {
+    if (auth) {
+      try {
+        await signOut(auth);
+        navigateTo('home'); // Navigate to home after logout
+      } catch (error) {
+        console.error("Error signing out:", error);
+      }
+    }
   };
 
   const renderPage = () => {
+    // Wait until Firebase auth is ready before rendering
+    if (!isAuthReady) {
+      return (
+        <div className="flex justify-center items-center h-[calc(100vh-80px)]">
+          <p className="text-2xl font-serif">Loading...</p>
+        </div>
+      );
+    }
+
     switch (page) {
       case 'home':
         return <HomePage navigateTo={navigateTo} />;
@@ -42,16 +142,16 @@ export default function App() {
       case 'login':
         // If already logged in, go to dashboard, else show login page
         return !isAuthenticated ? (
-          <LoginPage navigateTo={navigateTo} handleLogin={handleLogin} />
+          <LoginPage navigateTo={navigateTo} auth={auth} db={db} appId={appId} />
         ) : (
-          <DashboardPage navigateTo={navigateTo} />
+          <DashboardPage navigateTo={navigateTo} userId={userId} appId={appId} />
         );
       case 'dashboard':
         // If logged in, show dashboard, else force login
         return isAuthenticated ? (
-          <DashboardPage navigateTo={navigateTo} />
+          <DashboardPage navigateTo={navigateTo} userId={userId} appId={appId} />
         ) : (
-          <LoginPage navigateTo={navigateTo} handleLogin={handleLogin} />
+          <LoginPage navigateTo={navigateTo} auth={auth} db={db} appId={appId} />
         );
       default:
         return <HomePage navigateTo={navigateTo} />;
@@ -76,6 +176,7 @@ export default function App() {
 }
 
 // 1. Navbar Component
+// ... (No changes, existing code)
 function Navbar({ navigateTo, isMobileMenuOpen, setIsMobileMenuOpen, isAuthenticated, handleLogout }) {
   const navItems = [
     { name: 'Home', page: 'home' },
@@ -197,9 +298,10 @@ function Navbar({ navigateTo, isMobileMenuOpen, setIsMobileMenuOpen, isAuthentic
   );
 }
 
+
 // 2. Home Page Component
+// ... (No changes, existing code)
 function HomePage({ navigateTo }) {
-  // ... (existing code)
   return (
     <>
       <HeroSection navigateTo={navigateTo} />
@@ -211,8 +313,8 @@ function HomePage({ navigateTo }) {
 }
 
 // 3. Hero Section (for Home Page)
+// ... (No changes, existing code)
 function HeroSection({ navigateTo }) {
-  // ... (existing code)
   return (
     <section className="flex flex-col md:flex-row min-h-[calc(100vh-80px)]">
       {/* Left Column: Text Content */}
@@ -250,21 +352,14 @@ function HeroSection({ navigateTo }) {
          <h2 className="font-serif text-5xl font-bold text-white opacity-90">
             Handcrafted Pottery
          </h2>
-         {/* You could replace the H2 above with an image like this:
-           <img
-            className="w-full h-full object-cover"
-            src="https://placehold.co/800x1000/fdba74/FFFFFF?text=Pottery"
-            alt="Handcrafted Pottery"
-           />
-         */}
       </div>
     </section>
   );
 }
 
 // 4. Our Vision Bar
+// ... (No changes, existing code)
 function OurVisionBar() {
-  // ... (existing code)
   return (
     <div className="bg-white py-6 shadow-sm">
       <h3 className="text-center text-sm font-semibold text-orange-700 tracking-widest uppercase">
@@ -276,26 +371,26 @@ function OurVisionBar() {
 
 
 // 5. Features Section (for Home Page)
+// ... (No changes, existing code)
 function FeaturesSection() {
-  // ... (existing code)
   const features = [
     {
       name: 'Ensure Authenticity',
       description: 'Providing a secure and transparent environment for trading collectibles.',
       icon: ShieldCheck,
-      color: 'text-orange-600' // Updated color
+      color: 'text-orange-600'
     },
     {
       name: 'Cultural Preservation',
       description: 'Contributing to the preservation of heritage and artisanal livelihoods.',
       icon: BookUser,
-      color: 'text-amber-600' // Kept amber
+      color: 'text-amber-600'
     },
     {
       name: 'Sustainable Economics',
       description: 'Offering sustainable opportunities to artisans, the backbone of India\'s handicraft industry.',
       icon: Sprout,
-      color: 'text-orange-400' // Updated color
+      color: 'text-orange-400'
     },
   ];
 
@@ -326,8 +421,8 @@ function FeaturesSection() {
 }
 
 // 6. Categories Page / Section
+// ... (No changes, existing code)
 function CategoriesPage() {
-  // ... (existing code)
   return (
     <div className="bg-white py-24">
       <CategoriesSection />
@@ -335,8 +430,8 @@ function CategoriesPage() {
   );
 }
 
+// ... (No changes, existing code)
 function CategoriesSection() {
-  // ... (existing code)
    const categories = [
     { name: 'Vintage Coins', description: 'Rare numismatics from across eras.', icon: Coins },
     { name: 'Currencies & Notes', description: 'Historic banknotes and paper money.', icon: Feather },
@@ -389,8 +484,8 @@ function CategoriesSection() {
 }
 
 // 7. About Us Page
+// ... (No changes, existing code)
 function AboutPage() {
-  // ... (existing code)
   return (
     <section className="py-24 bg-orange-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -422,8 +517,8 @@ function AboutPage() {
 }
 
 // 8. Footer Component
+// ... (No changes, existing code)
 function Footer() {
-  // ... (existing code)
   return (
     <footer className="bg-orange-950 text-orange-200">
       <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
@@ -475,15 +570,62 @@ function Footer() {
   );
 }
 
-// 9. Login/Signup Page
-function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
+// 9. --- UPDATED: Login/Signup Page ---
+function LoginPage({ navigateTo, auth, db, appId }) {
   const [isLoginView, setIsLoginView] = useState(true);
+  
+  // --- NEW: Form state ---
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
 
+  // --- NEW: Handle Sign In ---
+  const handleSignIn = async () => {
+    if (!auth) return;
+    setError(''); // Clear previous errors
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      // No navigation needed, onAuthStateChanged in App component will handle it
+    } catch (err) {
+      console.error("Sign in error:", err.message);
+      setError("Failed to sign in. Please check your email and password.");
+    }
+  };
+
+  // --- NEW: Handle Sign Up ---
+  const handleSignUp = async () => {
+    if (!auth || !db) return;
+    setError(''); // Clear previous errors
+    try {
+      // 1. Create the user in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // 2. Save user's name to Firestore
+      // We use the private user data path: /artifacts/{appId}/users/{userId}/profile
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+      await setDoc(userDocRef, {
+        name: name,
+        email: email,
+        createdAt: new Date().toISOString()
+      });
+      
+      // No navigation needed, onAuthStateChanged in App component will handle it
+    } catch (err) {
+      console.error("Sign up error:", err.message);
+      setError("Failed to create account. " + err.message);
+    }
+  };
+
+  // --- NEW: Handle Form Submit ---
   const handleSubmit = (e) => {
     e.preventDefault();
-    // This is where you would typically validate credentials
-    // For this demo, we'll just call handleLogin
-    handleLogin(); 
+    if (isLoginView) {
+      handleSignIn();
+    } else {
+      handleSignUp();
+    }
   };
 
   return (
@@ -494,6 +636,14 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
             <h1 className="text-3xl font-bold leading-tight tracking-tight text-gray-900 md:text-4xl font-serif">
               {isLoginView ? 'Sign in to your account' : 'Create an account'}
             </h1>
+            
+            {/* NEW: Error Message Display */}
+            {error && (
+              <div className="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                {error}
+              </div>
+            )}
+
             <form className="space-y-4 md:space-y-6" onSubmit={handleSubmit}>
               
               {/* Name Input (Sign Up only) */}
@@ -515,6 +665,8 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
                       id="name"
                       className="bg-gray-50 border border-gray-300 text-gray-900 text-lg rounded-lg focus:ring-orange-600 focus:border-orange-600 block w-full pl-11 p-3"
                       placeholder="Name" 
+                      value={name} // Controlled component
+                      onChange={(e) => setName(e.target.value)}
                       required
                     />
                   </div>
@@ -539,6 +691,8 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
                     id="email"
                     className="bg-gray-50 border border-gray-300 text-gray-900 text-lg rounded-lg focus:ring-orange-600 focus:border-orange-600 block w-full pl-11 p-3"
                     placeholder="your gmail"
+                    value={email} // Controlled component
+                    onChange={(e) => setEmail(e.target.value)}
                     required
                   />
                 </div>
@@ -562,6 +716,8 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
                     id="password"
                     placeholder="••••••••"
                     className="bg-gray-50 border border-gray-300 text-gray-900 text-lg rounded-lg focus:ring-orange-600 focus:border-orange-600 block w-full pl-11 p-3"
+                    value={password} // Controlled component
+                    onChange={(e) => setPassword(e.target.value)}
                     required
                   />
                 </div>
@@ -592,7 +748,10 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
                 {isLoginView ? "Don’t have an account yet? " : "Already have an account? "}
                 <button
                   type="button"
-                  onClick={() => setIsLoginView(!isLoginView)}
+                  onClick={() => {
+                    setIsLoginView(!isLoginView);
+                    setError(''); // Clear errors on toggle
+                  }}
                   className="font-medium text-orange-600 hover:underline"
                 >
                   {isLoginView ? 'Sign up' : 'Sign in'}
@@ -607,8 +766,8 @@ function LoginPage({ navigateTo, handleLogin }) { // Added handleLogin prop
 }
 
 // 10. Dummy page components
+// ... (No changes, existing code)
 function ArtisanHubPage() {
-  // ... (existing code)
   return (
     <div className="py-24 bg-orange-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
@@ -623,8 +782,8 @@ function ArtisanHubPage() {
   );
 }
 
+// ... (No changes, existing code)
 function CollectorsPage() {
-  // ... (existing code)
   return (
     <div className="py-24 bg-orange-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
@@ -639,8 +798,8 @@ function CollectorsPage() {
   );
 }
 
-// 11. NEW: Dashboard Page
-function DashboardPage({ navigateTo }) {
+// 11. --- UPDATED: Dashboard Page ---
+function DashboardPage({ navigateTo, userId, appId }) { // Now accepts userId and appId
   const dashboardItems = [
     { name: 'My Collection', icon: Wallet, color: 'text-orange-600', page: 'collectors' },
     { name: 'My Listings', icon: Store, color: 'text-amber-600', page: 'artisan-hub' },
@@ -657,6 +816,16 @@ function DashboardPage({ navigateTo }) {
           <p className="text-xl text-gray-700 mb-12">
             Manage your collection, listings, and account settings all in one place.
           </p>
+
+          {/* NEW: Display User ID and App ID */}
+          <div className="mb-8 p-4 bg-orange-100 border border-orange-200 rounded-lg text-sm">
+            <p className="font-mono text-orange-900">
+              <span className="font-semibold">App ID:</span> {appId}
+            </p>
+            <p className="font-mono text-orange-900 mt-2">
+              <span className="font-semibold">User ID:</span> {userId}
+            </p>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {dashboardItems.map((item) => (
